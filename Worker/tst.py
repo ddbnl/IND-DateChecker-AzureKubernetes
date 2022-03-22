@@ -1,0 +1,1 @@
+import azure-data-tables

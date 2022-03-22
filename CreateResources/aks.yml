@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ind
+spec:
+  ports:
+  - port: 5000
+    protocol: TCP
+    targetPort: 5000
+  selector:
+    run: ind
+  type: LoadBalancer
+---
+kind: Deployment
+metadata: 
+  labels:
+    run: ind
+  name: ind
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      run: ind
+  template:
+    metadata:
+      labels:
+        run: ind
+    spec:
+      containers:
+      - name: web-frontend
+        image: indcr.azurecr.io/web_frontend:latest
+        ports:
+        - containerPort: 5000
+      - name: api-server
+        image: indcr.azurecr.io/api_server:latest
+        ports:
+        - containerPort: 5001
+      - name: worker
+        image: indcr.azurecr.io/worker:latest

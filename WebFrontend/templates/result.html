@@ -1,0 +1,26 @@
+<!doctype html>
+
+<head>
+    <title>Appointment finder</title>
+</head>
+<body>
+    <h1>Running:</h1>
+    <p>Your job ID is: {{ run_id }}</p>
+    {% if continuous %}
+    <p>Checking periodically until a result is found.</p>
+    {% else %}
+    <p>Checking once.</p>
+    {% endif %}
+    {% if email %}
+    <p>Results will also be emailed to: {{ email }}</p>
+    {% endif %}
+    <div id="main">Waiting for results</div>
+</body>
+<script src="https://code.jquery.com/jquery-2.1.1.min.js" type="text/javascript"></script>
+<script>
+    $(document).ready(function(){
+        setInterval(function(){
+            $("#main").load('get_result?run_id={{ run_id }}')
+        }, 2000);
+    });
+</script>

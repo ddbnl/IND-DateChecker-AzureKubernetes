@@ -1,0 +1,86 @@
+<!doctype html>
+
+<script type="text/javascript" src="https://cdn.jsdelivr.net/jquery/latest/jquery.min.js"></script>
+<script type="text/javascript" src="https://cdn.jsdelivr.net/momentjs/latest/moment.min.js"></script>
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/daterangepicker/daterangepicker.min.js"></script>
+<link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/daterangepicker/daterangepicker.css" />
+<head>
+    <title>Appointment finder</title>
+    <style>
+        p {color: red;}
+    </style>
+</head>
+<body>
+{% with messages = get_flashed_messages() %}
+   {% if messages %}
+     <ul class="flashes">
+        {% for message in messages %}
+         <div class="message_flash"><p>{{ message }}</p></div>
+        {% endfor %}
+    </ul>
+  {% endif %}
+{% endwith %}
+
+    <h1>Appoint finder</h1>
+
+    <form method="post">
+        <table>
+            <tr>
+                <td><h4>Gewenste data: </h4></td>
+                <td><input id="date" type="text" name="daterange" value="{{ start_date }} - {{ end_date }}" /></td>
+            </tr>
+        </table>
+        <table>
+            <tr>
+                <td><h4>Gewenste kantoren: </h4></td>
+                {% for desk in desks %}
+                <td>
+                    <input type="checkbox" id="desk_{{ desk }}" name="desk_{{ desk }}" checked>
+                    <label for="desk_{{ desk }}">{{ desk }}</label>
+                </td>
+                {% endfor %}
+            </tr>
+        </table>
+        <table>
+            <tr>
+                <td><h4>Zoek methode: </h4></td>
+                <td>
+                    <input type="radio" id="run_once" name="method" value="run_once" checked>
+                    <label for="run_once">Eenmalig</label><br>
+                </td>
+                <td>
+                    <input type="radio" id="run_continuously" name="method" value="run_continuously">
+                    <label for="run_continuously">Constant (met e-mail alarm)</label><br>
+                </td>
+            </tr>
+        </table>
+        <table>
+            <tr>
+                <td><h4>Email alert: </h4></td>
+                <td><input type="text" id="email" name="email"></td>
+            </tr>
+        </table>
+        <button type="submit">Start</button>
+    </form>
+</body>
+<script>
+$(function() {
+  $('input[name="daterange"]').daterangepicker({
+    opens: 'left',
+    locale: {
+      format: 'DD/MM/YYYY'
+    }
+  }, function(start, end, label) {
+    console.log("A new date selection was made: " + start.format('YYYY-MM-DD') + ' to ' + end.format('YYYY-MM-DD'));
+  });
+});
+
+$(function() {
+// setTimeout() function will be fired after page is loaded
+// it will wait for 5 sec. and then will fire
+// $(".message_flash").hide() function
+  setTimeout(function() {
+      $(".message_flash").hide('blind', {}, 500)
+  }, 5000);
+})
+</script>
