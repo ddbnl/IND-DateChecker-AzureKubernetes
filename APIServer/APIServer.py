@@ -5,13 +5,13 @@ from azure.data.tables import TableServiceClient
 import json
 import time
 import uuid
+from Common import connect_str, queue_name, table_name
 
 app = Flask(__name__)
 
-connect_str = ""
-run_once_queue_client = QueueClient.from_connection_string(connect_str, 'run-once-queue')
+run_once_queue_client = QueueClient.from_connection_string(connect_str, queue_name)
 table_service = TableServiceClient.from_connection_string(conn_str=connect_str)
-table_client = table_service.get_table_client(table_name="INDTable")
+table_client = table_service.get_table_client(table_name=table_name)
 
 
 def send_message_to_queue(message):

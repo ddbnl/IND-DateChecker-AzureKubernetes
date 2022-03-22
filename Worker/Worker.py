@@ -11,12 +11,12 @@ from email.mime.text import MIMEText
 import time
 import datetime
 import logging
+from Common import connect_str, queue_name, table_name, sender_address, sender_pass
 logging.basicConfig(level=logging.INFO)
 
-connect_str = ""
-queue_run_once_client = QueueClient.from_connection_string(connect_str, 'run-once-queue')
+queue_run_once_client = QueueClient.from_connection_string(connect_str, queue_name)
 table_service = TableServiceClient.from_connection_string(conn_str=connect_str)
-table_client = table_service.get_table_client(table_name="INDTable")
+table_client = table_service.get_table_client(table_name=table_name)
 
 
 class DateChecker:
@@ -118,7 +118,10 @@ class DateChecker:
         self.driver.quit()
         if self.results:
             if self.email:
-                self.mail_results()
+                try:
+                    self.mail_results()
+                except Exception as e:
+                    logging.error("Mailing results failed: {}".format(e))
             if store_results:
                 self.store_results()
 
@@ -201,9 +204,6 @@ class DateChecker:
         Email results using GMAIL SMTP.
         """
         mail_content = "\n".join(self.results)
-        sender_address = ''
-        sender_pass = ''
-
         message = MIMEMultipart()
         message['From'] = sender_address
         message['To'] = self.email

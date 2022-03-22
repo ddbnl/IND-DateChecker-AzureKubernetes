@@ -3,11 +3,12 @@ import datetime
 from dateutil.relativedelta import relativedelta
 import requests
 import json
+from Common import secret_key
 
 api_server = '127.0.0.1:5001'
 
 app = Flask(__name__)
-app.secret_key = ''
+app.secret_key = secret_key
 
 
 def get_desks():
