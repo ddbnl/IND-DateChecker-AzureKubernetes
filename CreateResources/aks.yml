@@ -31,9 +31,25 @@ spec:
         image: indcr.azurecr.io/web_frontend:latest
         ports:
         - containerPort: 5000
+        resources:
+          requests:
+            cpu: 250m
+          limits:
+            cpu: 500m
+
       - name: api-server
         image: indcr.azurecr.io/api_server:latest
         ports:
         - containerPort: 5001
+        resources:
+          requests:
+            cpu: 250m
+          limits:
+            cpu: 500m
       - name: worker
         image: indcr.azurecr.io/worker:latest
+        resources:
+          requests:
+            cpu: 250m
+          limits:
+            cpu: 500m

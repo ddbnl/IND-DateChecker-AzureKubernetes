@@ -23,7 +23,7 @@ table_client = table_service.get_table_client(table_name=table_name)
 
 class DateChecker:
 
-    def __init__(self, url, cool_down_time=5, max_threads=10):
+    def __init__(self, url, cool_down_time=5, max_threads=20):
         """
         Check available dates on website.
         :param url: URL of website to check dates for (str)
@@ -44,6 +44,9 @@ class DateChecker:
         """
         message_switch = True
         while True:
+            for thread in self.threads.copy():
+                if not thread.is_alive():
+                    self.threads.remove(thread)
             if len(self.threads) >= self.max_threads:
                 logging.warning("Maximum threads reached, not taking new requests")
             elif message_switch and from_queue:
