@@ -1,9 +1,12 @@
+import logging
+
 from flask import Flask, render_template, url_for, flash, request, redirect
 import datetime
 from dateutil.relativedelta import relativedelta
 import requests
 import json
 from Common import secret_key
+import time
 
 api_server = '127.0.0.1:5001'
 
@@ -13,8 +16,23 @@ app.secret_key = secret_key
 
 def get_desks():
 
-    # Get from API
-    return ['IND Den Bosch', 'IND Amsterdam', 'IND Utrecht', 'IND Groningen', 'IND Zwolle']
+    desks = requests.get("http://{}/desks".format(api_server)).text
+    if not desks:
+        raise RuntimeError("Could not get desks from API server")
+    return desks.split(',')
+
+
+timeout = 0
+while True:
+    if timeout >= 10:
+        raise RuntimeError("Could not get desks from API server")
+    try:
+        available_desks = get_desks()
+        break
+    except Exception as e:
+        logging.error("Failed to get desks: {}".format(e))
+        timeout += 1
+        time.sleep(5)
 
 
 def request_run_once(parameters):
@@ -44,8 +62,8 @@ def root():
         else:
             try:
                 if method == 'run_once':
-                    response = request_run_once(parameters={'start_date': start_date, 'end_date': end_date, 'email': email,
-                                                            'desks': desks})
+                    response = request_run_once(parameters={'start_date': start_date, 'end_date': end_date,
+                                                            'email': email, 'desks': desks})
                 else:
                     response = request_run_continuous(parameters={'start_date': start_date, 'end_date': end_date,
                                                                   'email': email, 'desks': desks})
@@ -57,7 +75,7 @@ def root():
     start_date = "{}/{}/{}".format(now.day, now.month, now.year)
     three_months_later = datetime.datetime.now() + relativedelta(months=3)
     end_date = "{}/{}/{}".format(three_months_later.day, three_months_later.month, three_months_later.year)
-    return render_template('index.html', desks=get_desks(), start_date=start_date, end_date=end_date)
+    return render_template('index.html', desks=available_desks, start_date=start_date, end_date=end_date)
 
 
 @app.route("/index", methods=('GET', 'POST'))

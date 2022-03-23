@@ -2,8 +2,9 @@ import azure.core.exceptions
 from flask import Flask, request
 from azure.storage.queue import QueueClient
 from azure.data.tables import TableServiceClient
-import json
+import datetime
 import time
+import json
 import uuid
 from Common import connect_str, queue_name, table_name
 
@@ -45,6 +46,36 @@ def run_continuous():
         'LastRun': ''}
     table_client.create_entity(entity)
     return run_id
+
+
+@app.route("/desks", methods=['GET'])
+def desks():
+
+    try:
+        entity = table_client.get_entity('Desks', '0')
+        if not datetime.datetime.now() - datetime.datetime.strptime(entity['CheckedAt'], '%d/%m/%Y %H:%M:%S') < \
+           datetime.timedelta(minutes=60):
+            table_client.delete_entity(partition_key='Desks', row_key='0')
+            raise ValueError("Desks checked too long ago")
+        desks = entity['Desks']
+    except (azure.core.exceptions.ResourceNotFoundError, ValueError):
+        send_message_to_queue(message="check_desks")
+        desks = _wait_for_desk_result()
+    return desks
+
+
+def _wait_for_desk_result():
+
+    while True:
+        timer = 1
+        try:
+            if timer > 120:
+                return
+            return table_client.get_entity('Desks', '0')['Desks']
+        except azure.core.exceptions.ResourceNotFoundError:
+            timer += 1
+            time.sleep(1)
+            continue
 
 
 @app.route('/get_result')
