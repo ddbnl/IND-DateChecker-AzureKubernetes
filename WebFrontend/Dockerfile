@@ -6,6 +6,7 @@ RUN pip3 install flask requests python-dateutil
 
 EXPOSE 5000 5000
 
+COPY Common.py /web_frontend/Common.py
 COPY WebFrontEnd.py /web_frontend/WebFrontEnd.py
 COPY templates /web_frontend/templates
 

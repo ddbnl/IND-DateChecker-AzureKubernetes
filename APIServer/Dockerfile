@@ -6,6 +6,7 @@ RUN python3 -m pip install flask python-dateutil requests azure-storage-queue az
 
 EXPOSE 5001 5001
 
+COPY Common.py /api_server/Common.py
 COPY APIServer.py /api_server/APIServer.py
 
 WORKDIR /api_server
