@@ -1,5 +1,4 @@
 #!/bin/bash
-
 cp Common.py ./APIServer/Common.py
 cp Common.py ./Worker/Common.py
 cp Common.py ./WebFrontend/Common.py
@@ -18,3 +17,5 @@ docker push indcr.azurecr.io/api_server
 docker push indcr.azurecr.io/worker
 docker push indcr.azurecr.io/web_frontend
 
+kubectl delete -f ./CreateResources/aks.yml
+kubectl create -f ./CreateResources/aks.yml

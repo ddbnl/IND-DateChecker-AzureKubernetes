@@ -7,7 +7,9 @@ Components:
 - AKS:
   - Azure public load balancer
     - Exposes Web frontend pod(s) 
-  - (Scalable) pod:
+  - Cluster IP services:
+    - For internal DNS name to API server
+  - Pod deployments:
     - Web frontend container
       - Runs FLASK to present front end
     - API container
@@ -17,6 +19,7 @@ Components:
       - Uses Selenium to check for dates  
       - Checks message queue for single run requests, executes them and writes result to database
       - Checks storage table for continuous run requests, executes them, stores result in database if a date is found, else runs again periodically
+  - HPA for each deployment for auto scaling
 - Azure storage account:
   - Queue:
     - Messages requesting a single date check
