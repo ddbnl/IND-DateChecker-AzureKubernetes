@@ -2,9 +2,10 @@ FROM selenium/standalone-chrome
 
 RUN sudo apt-get update && sudo apt-get -y install python3 python3-pip
 RUN sudo mkdir -p /worker
-RUN pip3 install selenium webdriver_manager azure-storage-queue azure-data-tables
+RUN pip3 install selenium webdriver_manager
 
-COPY Common.py /worker/Common.py
+EXPOSE 5003 5003
+
 COPY Worker.py /worker/Worker.py
 
 WORKDIR /worker

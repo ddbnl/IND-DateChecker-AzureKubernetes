@@ -25,7 +25,7 @@ def run_once():
 
     parameters = json.loads(request.json)
     run_id = uuid.uuid4()
-    message = u"{},{},{},{},{}".format(run_id, parameters['start_date'], parameters['end_date'],
+    message = u"{},{},{},{},{},0".format(run_id, parameters['start_date'], parameters['end_date'],
                                     '+'.join(parameters['desks']), parameters['email'] or 'none')
     send_message_to_queue(message=message)
     return str(run_id)
@@ -43,7 +43,8 @@ def run_continuous():
         'EndDate': parameters['end_date'],
         'Desks': '+'.join(parameters['desks']),
         'Email': parameters['email'] or 'none',
-        'LastRun': ''}
+        'LastRun': '',
+        'ErrorCount': 0}
     table_client.create_entity(entity)
     return run_id
 
@@ -59,7 +60,7 @@ def desks():
             raise ValueError("Desks checked too long ago")
         desks = entity['Desks']
     except (azure.core.exceptions.ResourceNotFoundError, ValueError):
-        send_message_to_queue(message="check_desks")
+        send_message_to_queue(message="check_desks, 0")
         desks = _wait_for_desk_result()
     return desks
 

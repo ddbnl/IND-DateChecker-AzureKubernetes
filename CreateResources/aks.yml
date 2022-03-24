@@ -31,6 +31,50 @@ spec:
         image: indcr.azurecr.io/web_frontend:latest
         ports:
         - containerPort: 5000
+        resources:
+          requests:
+            cpu: 100m
+          limits:
+            cpu: 100m
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  labels:
+    run: ind-controller
+  name: ind-controller
+spec:
+  selector:
+    matchLabels:
+      run: ind-controller
+  template:
+    metadata:
+      labels:
+        run: ind-controller
+    spec:
+      containers:
+        - name: controller
+          image: indcr.azurecr.io/controller:latest
+          ports:
+            - containerPort: 5002
+          resources:
+            requests:
+              cpu: 100m
+            limits:
+              cpu: 100m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ind-controller-ci
+spec:
+  type: ClusterIP
+  ports:
+    - name: "5002"
+      port: 5002
+      targetPort: 5002
+  selector:
+    run: ind-controller
 ---
 kind: Deployment
 apiVersion: apps/v1
@@ -89,11 +133,26 @@ spec:
       containers:
       - name: worker
         image: indcr.azurecr.io/worker:latest
+        ports:
+        - containerPort: 5003
         resources:
           requests:
             cpu: 100m
           limits:
             cpu: 500m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ind-worker-ci
+spec:
+  type: ClusterIP
+  ports:
+  - name: "5003"
+    port: 5003
+    targetPort: 5003
+  selector:
+    run: ind-worker
 ---
 apiVersion: autoscaling/v1
 kind: HorizontalPodAutoscaler
@@ -106,6 +165,19 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: ind-web-frontend
+  targetCPUUtilizationPercentage: 50
+---
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ind-controller-hpa
+spec:
+  maxReplicas: 10
+  minReplicas: 2
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ind-controller
   targetCPUUtilizationPercentage: 50
 ---
 apiVersion: autoscaling/v1
@@ -127,7 +199,7 @@ metadata:
   name: ind-worker-hpa
 spec:
   maxReplicas: 10
-  minReplicas: 1
+  minReplicas: 2
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment

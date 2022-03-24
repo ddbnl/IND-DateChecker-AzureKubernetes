@@ -1,6 +1,5 @@
 import logging
-
-from flask import Flask, render_template, url_for, flash, request, redirect
+from flask import Flask, render_template, flash, request
 import datetime
 from dateutil.relativedelta import relativedelta
 import requests
