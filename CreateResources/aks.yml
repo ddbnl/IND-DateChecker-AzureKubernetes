@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: ind
+  name: ind-lb
 spec:
   ports:
   - port: 5000
@@ -17,7 +17,6 @@ metadata:
     run: ind
   name: ind
 spec:
-  replicas: 3
   selector:
     matchLabels:
       run: ind
@@ -33,9 +32,9 @@ spec:
         - containerPort: 5000
         resources:
           requests:
-            cpu: 250m
+            cpu: 100m
           limits:
-            cpu: 500m
+            cpu: 100m
 
       - name: api-server
         image: indcr.azurecr.io/api_server:latest
@@ -43,13 +42,27 @@ spec:
         - containerPort: 5001
         resources:
           requests:
-            cpu: 250m
+            cpu: 100m
           limits:
-            cpu: 500m
+            cpu: 100m
       - name: worker
         image: indcr.azurecr.io/worker:latest
         resources:
           requests:
-            cpu: 250m
+            cpu: 100m
           limits:
             cpu: 500m
+---
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ind-hpa
+spec:
+  maxReplicas: 10
+  minReplicas: 1
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ind
+  targetCPUUtilizationPercentage: 50
+
