@@ -19,7 +19,7 @@ app = Flask(__name__)
 
 class DateChecker:
 
-    def __init__(self, url, controller_timeout=120):
+    def __init__(self, url, controller_timeout=300):
         """
         Check available dates on website.
         :param url: URL of website to check dates for (str)
@@ -44,7 +44,7 @@ class DateChecker:
     def register(self):
 
         worker_id = str(uuid.uuid4())
-        response = requests.post("http://ind-controller:5002/register?worker_id={}".format(worker_id))
+        response = requests.post("http://ind-controller-ci:5002/register?worker_id={}".format(worker_id))
         if response.text.lower().startswith('ok'):
             self.controller = response.text.split(',')[1]
             self.last_heard_from_controller = datetime.datetime.now()
@@ -103,7 +103,11 @@ class DateChecker:
         """
         Find a database request (if any) and run it.
         """
-        thread = threading.Thread(target=self.check_available_dates, kwargs=kwargs, daemon=True)
+        if 'check_desks' in kwargs and kwargs['check_desks'] is True:
+            del kwargs['check_desks']
+            thread = threading.Thread(target=self.get_available_desks, kwargs=kwargs, daemon=True)
+        else:
+            thread = threading.Thread(target=self.check_available_dates, kwargs=kwargs, daemon=True)
         thread.start()
 
     @staticmethod
@@ -193,6 +197,7 @@ class DateChecker:
 def shutdown_server():
     func = request.environ.get('werkzeug.server.shutdown')
     func()
+    quit()
 
 
 @app.route("/start_job", methods=['POST'])
@@ -207,7 +212,7 @@ def start_job():
 def adopt():
 
     date_checker.last_heard_from_controller = datetime.datetime.now()
-    date_checker.controller = request.remote_addr
+    date_checker.controller = request.remote_addr + ":5002"
     return "OK"
 
 

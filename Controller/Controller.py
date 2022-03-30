@@ -7,12 +7,15 @@ import collections
 import threading
 import datetime
 import requests
+import uuid
 import logging
 import smtplib
 import json
 import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+logger = logging.getLogger("azure.core.pipeline.policies.http_logging_policy")
+logger.setLevel(logging.WARNING)
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
@@ -39,7 +42,6 @@ class RegisteredWorker(object):
         :param new_worker: True if adding a new active worker to pool, False if just syncing (Bool)
         :param sync_from: Sync a worker from a database entity (TableClient.entity)
         """
-        self._entity = None
         self.jobs = collections.OrderedDict()
         self.last_job_started_at = None
         if new_worker:
@@ -71,9 +73,7 @@ class RegisteredWorker(object):
         Return table entity associated with this worker.
         :return: Azure.Data.Table.entity
         """
-        if not self._entity:
-            self._entity = table_client.get_entity(partition_key='RegisteredWorkers', row_key=self.worker_id)
-        return self._entity
+        return table_client.get_entity(partition_key='RegisteredWorkers', row_key=self.worker_id)
 
     @property
     def remote_addr(self):
@@ -105,7 +105,10 @@ class RegisteredWorker(object):
         """
         Delete the table entity representing this worker.
         """
-        table_client.delete_entity(partition_key='RegisteredWorkers', row_key=self.worker_id)
+        try:
+            table_client.delete_entity(partition_key='RegisteredWorkers', row_key=self.worker_id)
+        except azure.core.exceptions.ResourceNotFoundError:
+            pass
 
     def start_job(self, job_type, email=None, **kwargs):
         """
@@ -120,6 +123,7 @@ class RegisteredWorker(object):
         assert response.text.lower() == 'ok'
         self.jobs[kwargs['job_id']] = RegisteredJob(job_id=kwargs['job_id'], job_type=job_type, assigned_worker=self,
                                                     email=email, args=post_json)
+        logging.info("Started job of type {} on worker {}: {}".format(job_type, self.worker_id, kwargs))
 
     def shutdown(self):
         """
@@ -145,7 +149,6 @@ class RegisteredJob(object):
         :param assigned_worker: uuid4 or worker (str)
         :param email: email address to mail the results to if any (str)
         """
-        self._entity = None
         self.job_id = job_id
         self.register_in_database(job_id=job_id, job_type=job_type, assigned_worker=assigned_worker.worker_id,
                                   email=email, args=args)
@@ -156,9 +159,7 @@ class RegisteredJob(object):
         Return table entity associated with this job.
         :return: Azure.Data.Table.entity
         """
-        if not self._entity:
-            self._entity = table_client.get_entity(partition_key='RegisteredJobs', row_key=self.job_id)
-        return self._entity
+        return table_client.get_entity(partition_key='RegisteredJobs', row_key=self.job_id)
 
     @property
     def assigned_worker(self):
@@ -219,7 +220,10 @@ class RegisteredJob(object):
         """
         Delete the table entity representing this job.
         """
-        table_client.delete_entity(partition_key='RegisteredJobs', row_key=self.job_id)
+        try:
+            table_client.delete_entity(partition_key='RegisteredJobs', row_key=self.job_id)
+        except azure.core.exceptions.ResourceNotFoundError:
+            pass
 
     def complete(self, results):
         """
@@ -227,33 +231,38 @@ class RegisteredJob(object):
         them if an email is set for this job.
         :param results: str
         """
-        job_type = self.type
+        job_id, job_type, email = self.job_id, self.type, self.email
         self.unregister_from_database()
         if job_type == 'run-once':
-            self._complete_run_once_job(results=results)
-        elif job_type == 'get-desks':
+            self._complete_run_once_job(results=results, job_id=job_id)
+        elif job_type == 'check-desks':
             self._complete_get_desks_job(results=results)
         elif job_type == 'continuous':
-            self._complete_continuous_job(results=results)
+            self._complete_continuous_job(results=results, job_id=job_id, email=email)
 
-    def _complete_run_once_job(self, results):
+    @staticmethod
+    def _complete_run_once_job(results, job_id):
         """
         :param results: str
+        :param job_id: uuid4 str
         """
-        controller.store_results(job=self, results=results)
+        controller.store_results(job_id=job_id, results=results)
 
-    def _complete_continuous_job(self, results):
+    @staticmethod
+    def _complete_continuous_job(results, job_id, email):
         """
         :param results: str
+        :param job_id: uuid4 str
+        :param email: str
         """
-        entity = table_client.get_entity(partition_key='ContinuousRun', row_key=self.job_id)
+        entity = table_client.get_entity(partition_key='ContinuousRun', row_key=job_id)
         if not results:
             entity['ErrorCount'] = 0
             table_client.update_entity(entity)
-            return
-        controller.store_results(job=self, results=results)
-        controller.mail_results(job=self, results=results)
-        table_client.delete_entity(entity)
+        else:
+            controller.store_results(job_id=job_id, results=results)
+            controller.mail_results(email=email, results=results)
+            table_client.delete_entity(entity)
 
     @staticmethod
     def _complete_get_desks_job(results):
@@ -271,7 +280,7 @@ class RegisteredJob(object):
 
 class Controller(object):
 
-    def __init__(self, cool_down_time=5, heartbeat_time=30, worker_timeout=90, job_timeout=300, max_number_of_jobs=20,
+    def __init__(self, cool_down_time=300, heartbeat_time=30, worker_timeout=90, job_timeout=300, max_number_of_jobs=20,
                  worker_cooldown=3, max_job_errors=3, max_worker_errors=3):
         """
         Objects representing a controller that workers can register to. Controllers assign jobs to workers that are
@@ -319,7 +328,7 @@ class Controller(object):
         """
         worker_obj = worker_obj or RegisteredWorker(new_worker=True, worker_id=worker_id, remote_addr=remote_addr)
         self.registered_workers.append(worker_obj)
-        logging.info("Registered: {}@{}".format(worker_id, remote_addr))
+        logging.info("Registered: {}@{}".format(worker_obj.worker_id, worker_obj.remote_addr))
 
     def unregister_worker(self, worker):
         """
@@ -335,13 +344,14 @@ class Controller(object):
         :param worker: RegisteredWorker
         """
         try:
-            response = requests.post("http://{}/adopt".format(worker.remote_addr))
+            response = requests.post("http://{}:5003/adopt".format(worker.remote_addr))
             assert response.text.lower() == 'ok'
         except Exception as e:
             logging.warning("Cannot adopt '{}@{}': {}. Unregisting it completely.".format(
                 worker.worker_id, worker.remote_addr, e))
             worker.unregister_from_database()
         else:
+            logging.warning("Adopted '{}@{}'.".format(worker.worker_id, worker.remote_addr))
             self.register_worker(worker_obj=worker)
 
     @property
@@ -361,40 +371,44 @@ class Controller(object):
         for worker in self.registered_workers:
             if job_id in worker.jobs.keys():
                 worker.jobs[job_id].complete(results=results)
+                del worker.jobs[job_id]
 
     @staticmethod
-    def store_results(job, results):
+    def store_results(job_id, results):
         """
         Store results in Azure.Data.Table.
-        :param job: str
+        :param job_id: uuid4 str
         :param results: str
         """
         entity = {
             'PartitionKey': 'Result',
-            'RowKey': job.job_id,
+            'RowKey': job_id,
             'Result': results
         }
         table_client.create_entity(entity)
 
     @staticmethod
-    def mail_results(job, results):
+    def mail_results(email, results):
         """
         Email results using GMAIL SMTP.
-        :param job: str
+        :param email: str
         :param results: str
         """
-        mail_content = "\n".join(results.split(','))
-        message = MIMEMultipart()
-        message['From'] = sender_address
-        message['To'] = job.email
-        message['Subject'] = 'IND Datum gevonden!'
-        message.attach(MIMEText(mail_content, 'plain'))
-        session = smtplib.SMTP('smtp.gmail.com', 587)
-        session.starttls()
-        session.login(sender_address, sender_pass)
-        text = message.as_string()
-        session.sendmail(sender_address, job.email, text)
-        session.quit()
+        try:
+            mail_content = "\n".join(results.split(','))
+            message = MIMEMultipart()
+            message['From'] = sender_address
+            message['To'] = email
+            message['Subject'] = 'IND Datum gevonden!'
+            message.attach(MIMEText(mail_content, 'plain'))
+            session = smtplib.SMTP('smtp.gmail.com', 587)
+            session.starttls()
+            session.login(sender_address, sender_pass)
+            text = message.as_string()
+            session.sendmail(sender_address, email, text)
+            session.quit()
+        except Exception as e:
+            logging.error("Could not send email: {}".format(e))
 
     def check_heartbeats_loop(self):
         """
@@ -439,7 +453,6 @@ class Controller(object):
         while True:
             worker = self._available_worker
             if worker:
-                logging.info("Looking for work for: {}".format(worker.worker_id))
                 if self.jobs_to_restart:
                     job = self.jobs_to_restart.popleft()
                     self._restart_job(worker=worker, job=job)
@@ -465,23 +478,33 @@ class Controller(object):
     def _check_own_jobs(self):
 
         for worker in self.registered_workers:
-            for job in worker.jobs.copy():
-                if datetime.datetime.now() - datetime.datetime.strptime(job.started, '%d/%m/%Y %H:%M:%S') > \
-                        datetime.timedelta(seconds=self.job_timeout):
-                    worker.jobs.remove(job)
-                    worker.errors += 1
-                    if worker.errors >= self.max_worker_errors:
-                        worker.shutdown()
-                    self.jobs_to_restart.append(job)
+            for job_id, job in worker.jobs.copy().items():
+                try:
+                    if datetime.datetime.now() - datetime.datetime.strptime(job.started, '%d/%m/%Y %H:%M:%S') > \
+                            datetime.timedelta(seconds=self.job_timeout):
+                        del worker.jobs[job_id]
+                        worker.errors += 1
+                        if worker.errors >= self.max_worker_errors:
+                            worker.shutdown()
+                        else:
+                            self.jobs_to_restart.append(job)
+                except Exception as e:
+                    logging.error("Faulty job {}:{}, removing.".format(job_id, e))
+                    del worker.jobs[job_id]
+                    job.unregister_from_database()
 
     def _check_foreign_jobs(self):
 
         for job_entity in table_client.query_entities("PartitionKey eq 'RegisteredJobs'"):
             if datetime.datetime.now() - datetime.datetime.strptime(job_entity['started'], '%d/%m/%Y %H:%M:%S') > \
                     datetime.timedelta(seconds=self.job_timeout * 2):
-                job = RegisteredJob(job_id=job_entity['job_id'], job_type=job_entity['type'], args=job_entity['args'],
-                                    email=job_entity['email'])
-                self.jobs_to_restart.append(job)
+                try:
+                    job = RegisteredJob(job_id=job_entity['job_id'], job_type=job_entity['type'], args=job_entity['args'],
+                                        email=job_entity['email'])
+                    self.jobs_to_restart.append(job)
+                except Exception as e:
+                    logging.error("Could not restart job {}: {}. Deleting it from database".format(job_entity, e))
+                    table_client.delete_entity(job_entity)
 
     def _make_heartbeat(self, worker):
         """
@@ -491,8 +514,8 @@ class Controller(object):
         last_heartbeat_obj = datetime.datetime.strptime(worker.last_heartbeat, '%d/%m/%Y %H:%M:%S')
         if datetime.datetime.now() - last_heartbeat_obj > datetime.timedelta(seconds=self.heartbeat_time):
             try:
-                reponse = requests.get("http://{}:5003/heartbeat".format(worker.remote_addr), timeout=3)
-                if reponse.text == 'OK':
+                response = requests.get("http://{}:5003/heartbeat".format(worker.remote_addr), timeout=3)
+                if response.text == 'OK':
                     worker.entity['last_heartbeat'] = datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
                     table_client.update_entity(worker.entity)
                     return True
@@ -581,7 +604,8 @@ class Controller(object):
             try:
                 if message.content.startswith("check_desks"):
                     error_count = message.content.split(',')[-1]
-                    worker.start_job(job_type='check-desks', check_desks=True)
+                    kwargs = {'job_id': str(uuid.uuid4())}
+                    worker.start_job(job_type='check-desks', check_desks=True, **kwargs)
                 else:
                     job_id, desired_months, desks, error_count = self._parse_message_request(message=message)
                     kwargs = {'job_id': job_id, 'desired_months': desired_months, 'desks': desks}
@@ -600,8 +624,8 @@ class Controller(object):
         :return: Bool
         """
         return entity['LastRun'] and \
-               datetime.datetime.now() - datetime.datetime.strptime(entity['LastRun'], '%d/%m/%Y %H:%M:%S') > \
-               datetime.timedelta(minutes=self.cool_down_time)
+               datetime.datetime.now() - datetime.datetime.strptime(entity['LastRun'], '%d/%m/%Y %H:%M:%S') < \
+               datetime.timedelta(seconds=self.cool_down_time)
 
     @staticmethod
     def _update_request_timer(entity, date_time=None):

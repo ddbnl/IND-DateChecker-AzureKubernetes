@@ -7,7 +7,7 @@ import json
 from Common import secret_key
 import time
 
-api_server = 'ind-api-server:5001'
+api_server = 'ind-api-server-ci:5001'
 
 app = Flask(__name__)
 app.secret_key = secret_key

@@ -8,17 +8,24 @@ Components:
   - Azure public load balancer
     - Exposes Web frontend pod(s) 
   - Cluster IP services:
-    - For internal DNS name to API server
+    - For internal DNS name to API servers
+    - For internal DNS name to Controllers
   - Pod deployments:
     - Web frontend container
       - Runs FLASK to present front end
     - API container
       - Runs Flask to accept http requests
       - Handles making new date check requests, checking for results of previous checks, etc.
+    - Controller container
+      - Finds jobs in Azure Table and Message Queue
+      - Distributes jobs to workers
+      - Keeps track- and takes care of running workers and jobs
+      - Emails results for continuous jobs
     - Worker container
+      - Registers to a controller and waits for job assignments
       - Uses Selenium to check for dates  
-      - Checks message queue for single run requests, executes them and writes result to database
-      - Checks storage table for continuous run requests, executes them, stores result in database if a date is found, else runs again periodically
+      - Executes run-once jobs and writes result to database
+      - Executes continuous jobs and stores result in database if a date is found, else runs again periodically
   - HPA for each deployment for auto scaling
 - Azure storage account:
   - Queue:
@@ -26,3 +33,5 @@ Components:
   - Table:
     - Entities for continuous date checks (i.e. run repeatedly until an available date is found) 
     - Entities for result of previous runs 
+    - Entities for live worker containers
+    - entities for live jobs

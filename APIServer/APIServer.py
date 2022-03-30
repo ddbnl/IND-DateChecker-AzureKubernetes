@@ -25,8 +25,8 @@ def run_once():
 
     parameters = json.loads(request.json)
     run_id = uuid.uuid4()
-    message = u"{},{},{},{},{},0".format(run_id, parameters['start_date'], parameters['end_date'],
-                                    '+'.join(parameters['desks']), parameters['email'] or 'none')
+    message = u"{},{},{},{},0".format(run_id, parameters['start_date'], parameters['end_date'],
+                                    '+'.join(parameters['desks']))
     send_message_to_queue(message=message)
     return str(run_id)
 
@@ -35,10 +35,10 @@ def run_once():
 def run_continuous():
 
     parameters = json.loads(request.json)
-    run_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
     entity = {
         'PartitionKey': 'ContinuousRun',
-        'RowKey': run_id,
+        'RowKey': job_id,
         'StartDate': parameters['start_date'],
         'EndDate': parameters['end_date'],
         'Desks': '+'.join(parameters['desks']),
@@ -46,7 +46,7 @@ def run_continuous():
         'LastRun': '',
         'ErrorCount': 0}
     table_client.create_entity(entity)
-    return run_id
+    return job_id
 
 
 @app.route("/desks", methods=['GET'])
