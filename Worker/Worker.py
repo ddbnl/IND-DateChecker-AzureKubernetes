@@ -9,12 +9,46 @@ import uuid
 import json
 import requests
 import datetime
+from opencensus.trace import config_integration
+from opencensus.ext.flask.flask_middleware import FlaskMiddleware
+from opencensus.trace.samplers import ProbabilitySampler
+from opencensus.ext.azure.trace_exporter import AzureExporter
+from opencensus.trace.tracer import Tracer
+from opencensus.ext.azure.log_exporter import AzureLogHandler
+from opencensus.ext.azure import metrics_exporter
+from opencensus.stats import aggregation as aggregation_module
+from opencensus.stats import measure as measure_module
+from opencensus.stats import stats as stats_module
+from opencensus.stats import view as view_module
+from opencensus.tags import tag_map as tag_map_module
 import logging
 import threading
-logging.basicConfig(level=logging.INFO)
+from Common import instrumentation_key
+
+config_integration.trace_integrations(['logging', 'requests'])
+tracer = Tracer(exporter=AzureExporter(connection_string=instrumentation_key), sampler=ProbabilitySampler(1.0))
+FORMAT = '[%(asctime)s] [CONTROLLER] [traceId=%(traceId)s spanId=%(spanId)s] %(message)s'
+logging.basicConfig(format=FORMAT)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.addHandler(AzureLogHandler(connection_string=instrumentation_key))
+
+stats = stats_module.stats
+view_manager = stats.view_manager
+stats_recorder = stats.stats_recorder
+number_of_jobs_measure = measure_module.MeasureInt("jobs", "number of jobs", "jobs")
+workers_view = view_module.View("jobs view", "number of jobs", [], number_of_jobs_measure,
+                                aggregation_module.CountAggregation())
+view_manager.register_view(workers_view)
+mmap = stats_recorder.new_measurement_map()
+tmap = tag_map_module.TagMap()
+exporter = metrics_exporter.new_metrics_exporter(connection_string=instrumentation_key)
+view_manager.register_exporter(exporter)
 
 
 app = Flask(__name__)
+middleware = FlaskMiddleware(app,exporter=AzureExporter(connection_string=instrumentation_key),
+                             sampler=ProbabilitySampler(rate=1.0),)
 
 
 class DateChecker:
@@ -44,7 +78,8 @@ class DateChecker:
     def register(self):
 
         worker_id = str(uuid.uuid4())
-        response = requests.post("http://ind-controller-ci:5002/register?worker_id={}".format(worker_id))
+        with tracer.span(name='worker_register'):
+            response = requests.post("http://ind-controller-ci:5002/register?worker_id={}".format(worker_id))
         if response.text.lower().startswith('ok'):
             self.controller = response.text.split(',')[1]
             self.last_heard_from_controller = datetime.datetime.now()
@@ -76,7 +111,8 @@ class DateChecker:
 
     def return_results(self, job_id, results):
 
-        requests.post("http://{}/return_result?job_id={}&result={}".format(self.controller, job_id, results))
+        with tracer.span(name='worker_return_results'):
+            requests.post("http://{}/return_result?job_id={}&result={}".format(self.controller, job_id, results))
 
     def get_available_desks(self, job_id):
 
@@ -109,6 +145,10 @@ class DateChecker:
         else:
             thread = threading.Thread(target=self.check_available_dates, kwargs=kwargs, daemon=True)
         thread.start()
+        with tracer.span(name=kwargs['job_id']):
+            logger.info("Started job: {}".format(kwargs))
+        mmap.measure_int_put(number_of_jobs_measure, 1)
+        mmap.record(tmap)
 
     @staticmethod
     def _get_desk_options(driver):
@@ -142,7 +182,7 @@ class DateChecker:
         """
         desk_dropdown.select_by_visible_text(desk_value.text)
         time.sleep(2)
-        logging.info('[{}] Do {}'.format(datetime.datetime.now(), desk_value.text))
+        logger.info('[{}] Do {}'.format(datetime.datetime.now(), desk_value.text))
         if click_month_picker:
             self._click_month_picker(driver=driver)
         if self._check_desk_for_available_months(driver=driver, desk_value=desk_value, desired_months=desired_months,
@@ -188,13 +228,14 @@ class DateChecker:
             if not potential_day_button.is_enabled():
                 continue
             results.append('{} - {} {}'.format(desk_value.text, day_text, month))
-            logging.info('[{}] Found result: {}'.format(datetime.datetime.now(), desk_value.text))
+            logger.info('[{}] Found result: {}'.format(datetime.datetime.now(), desk_value.text))
             break
         else:
-            logging.info('[{}] No result: {}'.format(datetime.datetime.now(), desk_value.text))
+            logger.info('[{}] No result: {}'.format(datetime.datetime.now(), desk_value.text))
 
 
 def shutdown_server():
+    logger.info("Shutting down server")
     func = request.environ.get('werkzeug.server.shutdown')
     func()
     quit()
@@ -231,7 +272,7 @@ if __name__ == '__main__':
         try:
             date_checker.register()
         except Exception as e:
-            logging.error("Could not register to controller: {}".format(e))
+            logger.error("Could not register to controller: {}".format(e))
             timeout += 1
             if timeout >= 120:
                 quit()

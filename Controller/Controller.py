@@ -2,24 +2,56 @@ import azure.core.exceptions
 from flask import Flask, request
 from azure.storage.queue import QueueClient
 from azure.data.tables import TableServiceClient
-from Common import connect_str, table_name, queue_name, sender_address, sender_pass
+from Common import instrumentation_key, connect_str, table_name, queue_name, sender_address, sender_pass
 import collections
 import threading
 import datetime
 import requests
 import uuid
 import logging
+from opencensus.trace import config_integration
+from opencensus.ext.flask.flask_middleware import FlaskMiddleware
+from opencensus.trace.samplers import ProbabilitySampler
+from opencensus.ext.azure.trace_exporter import AzureExporter
+from opencensus.trace.tracer import Tracer
+from opencensus.ext.azure import metrics_exporter
+from opencensus.stats import aggregation as aggregation_module
+from opencensus.stats import measure as measure_module
+from opencensus.stats import stats as stats_module
+from opencensus.stats import view as view_module
+from opencensus.tags import tag_map as tag_map_module
+from opencensus.ext.azure.log_exporter import AzureLogHandler
 import smtplib
 import json
 import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-logger = logging.getLogger("azure.core.pipeline.policies.http_logging_policy")
-logger.setLevel(logging.WARNING)
-logging.basicConfig(level=logging.INFO)
+
+az_logger = logging.getLogger("azure.core.pipeline.policies.http_logging_policy")
+az_logger.setLevel(logging.WARNING)
+config_integration.trace_integrations(['logging', 'requests'])
+tracer = Tracer(exporter=AzureExporter(connection_string=instrumentation_key), sampler=ProbabilitySampler(1.0))
+FORMAT = '[%(asctime)s] [CONTROLLER] [traceId=%(traceId)s spanId=%(spanId)s] %(message)s'
+logging.basicConfig(format=FORMAT)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.addHandler(AzureLogHandler(connection_string=instrumentation_key))
+
+stats = stats_module.stats
+view_manager = stats.view_manager
+stats_recorder = stats.stats_recorder
+workers_measure = measure_module.MeasureInt("workers", "number of workers", "workers")
+workers_view = view_module.View("workers view", "number of workers", [], workers_measure,
+                                aggregation_module.LastValueAggregation())
+view_manager.register_view(workers_view)
+mmap = stats_recorder.new_measurement_map()
+tmap = tag_map_module.TagMap()
+exporter = metrics_exporter.new_metrics_exporter(connection_string=instrumentation_key)
+view_manager.register_exporter(exporter)
 
 app = Flask(__name__)
-
+middleware = FlaskMiddleware(app, exporter=AzureExporter(connection_string=instrumentation_key),
+                             sampler=ProbabilitySampler(rate=1.0),)
 
 queue_run_once_client = QueueClient.from_connection_string(connect_str, queue_name)
 table_service = TableServiceClient.from_connection_string(conn_str=connect_str)
@@ -119,20 +151,24 @@ class RegisteredWorker(object):
         """
         post_json = json.dumps(kwargs)
         self.last_job_started_at = datetime.datetime.now()
-        response = requests.post("http://{}:5003/start_job".format(self.remote_addr), json=post_json)
+        with tracer.span(name=kwargs['job_id']):
+            logger.info("Starting job of type {} on worker {}: {}".format(job_type, self.worker_id, kwargs))
+
+        with tracer.span(name='controller_start_job'):
+            response = requests.post("http://{}:5003/start_job".format(self.remote_addr), json=post_json)
         assert response.text.lower() == 'ok'
         self.jobs[kwargs['job_id']] = RegisteredJob(job_id=kwargs['job_id'], job_type=job_type, assigned_worker=self,
                                                     email=email, args=post_json)
-        logging.info("Started job of type {} on worker {}: {}".format(job_type, self.worker_id, kwargs))
 
     def shutdown(self):
         """
         Shutdown the worker container represented by this object.
         """
         try:
-            requests.post("http://{}:5003/shutdown".format(self.remote_addr))
+            with tracer.span(name='controller_shutdown'):
+                requests.post("http://{}:5003/shutdown".format(self.remote_addr))
         except Exception as e:
-            logging.error("Could not shutdown '{}@{}' with: {}. perhaps it's already down?".format(
+            logger.error("Could not shutdown '{}@{}' with: {}. perhaps it's already down?".format(
                 self.worker_id, self.remote_addr, e))
         self.unregister_from_database()
 
@@ -328,7 +364,9 @@ class Controller(object):
         """
         worker_obj = worker_obj or RegisteredWorker(new_worker=True, worker_id=worker_id, remote_addr=remote_addr)
         self.registered_workers.append(worker_obj)
-        logging.info("Registered: {}@{}".format(worker_obj.worker_id, worker_obj.remote_addr))
+        logger.info("Registered: {}@{}".format(worker_obj.worker_id, worker_obj.remote_addr))
+        mmap.measure_int_put(workers_measure, len(self.registered_workers))
+        mmap.record(tmap)
 
     def unregister_worker(self, worker):
         """
@@ -344,14 +382,15 @@ class Controller(object):
         :param worker: RegisteredWorker
         """
         try:
-            response = requests.post("http://{}:5003/adopt".format(worker.remote_addr))
+            with tracer.span(name='controller_adopt'):
+                response = requests.post("http://{}:5003/adopt".format(worker.remote_addr))
             assert response.text.lower() == 'ok'
         except Exception as e:
-            logging.warning("Cannot adopt '{}@{}': {}. Unregisting it completely.".format(
+            logger.warning("Cannot adopt '{}@{}': {}. Unregisting it completely.".format(
                 worker.worker_id, worker.remote_addr, e))
             worker.unregister_from_database()
         else:
-            logging.warning("Adopted '{}@{}'.".format(worker.worker_id, worker.remote_addr))
+            logger.warning("Adopted '{}@{}'.".format(worker.worker_id, worker.remote_addr))
             self.register_worker(worker_obj=worker)
 
     @property
@@ -408,7 +447,7 @@ class Controller(object):
             session.sendmail(sender_address, email, text)
             session.quit()
         except Exception as e:
-            logging.error("Could not send email: {}".format(e))
+            logger.error("Could not send email: {}".format(e))
 
     def check_heartbeats_loop(self):
         """
@@ -489,7 +528,7 @@ class Controller(object):
                         else:
                             self.jobs_to_restart.append(job)
                 except Exception as e:
-                    logging.error("Faulty job {}:{}, removing.".format(job_id, e))
+                    logger.error("Faulty job {}:{}, removing.".format(job_id, e))
                     del worker.jobs[job_id]
                     job.unregister_from_database()
 
@@ -503,7 +542,7 @@ class Controller(object):
                                         email=job_entity['email'])
                     self.jobs_to_restart.append(job)
                 except Exception as e:
-                    logging.error("Could not restart job {}: {}. Deleting it from database".format(job_entity, e))
+                    logger.error("Could not restart job {}: {}. Deleting it from database".format(job_entity, e))
                     table_client.delete_entity(job_entity)
 
     def _make_heartbeat(self, worker):
@@ -514,13 +553,14 @@ class Controller(object):
         last_heartbeat_obj = datetime.datetime.strptime(worker.last_heartbeat, '%d/%m/%Y %H:%M:%S')
         if datetime.datetime.now() - last_heartbeat_obj > datetime.timedelta(seconds=self.heartbeat_time):
             try:
-                response = requests.get("http://{}:5003/heartbeat".format(worker.remote_addr), timeout=3)
-                if response.text == 'OK':
-                    worker.entity['last_heartbeat'] = datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
-                    table_client.update_entity(worker.entity)
-                    return True
+                with tracer.span(name='controller_heartbeat'):
+                    response = requests.get("http://{}:5003/heartbeat".format(worker.remote_addr), timeout=3)
+                    if response.text == 'OK':
+                        worker.entity['last_heartbeat'] = datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+                        table_client.update_entity(worker.entity)
+                        return True
             except Exception as e:
-                logging.error("Heartbeat failed for {}@{}: {}".format(worker.worker_id, worker.remote_addr, e))
+                logger.error("Heartbeat failed for {}@{}: {}".format(worker.worker_id, worker.remote_addr, e))
                 if datetime.datetime.now() - last_heartbeat_obj > datetime.timedelta(seconds=self.worker_timeout):
                     self.unregister_worker(worker=worker)
 
@@ -542,11 +582,11 @@ class Controller(object):
         """
         try:
             if self._make_heartbeat(worker=worker):
-                logging.warning("Adopting orphaned worker: {}@{}".format(worker.worker_id,
+                logger.warning("Adopting orphaned worker: {}@{}".format(worker.worker_id,
                                                                          worker.remote_addr))
                 self.adopt_worker(worker=worker)
         except Exception as e:
-            logging.warning("Orphaned worker not responding, deleting from database: {}@{} ({})".format(
+            logger.warning("Orphaned worker not responding, deleting from database: {}@{} ({})".format(
                 worker.worker_id, worker.remote_addr, e))
             worker.unregister_from_database()
             if worker in self.synced_workers:
@@ -586,7 +626,7 @@ class Controller(object):
                     kwargs = {'job_id': job_id, 'desired_months': desired_months, 'desks': desks}
                     worker.start_job(job_type='continuous', **kwargs)
                 except Exception as e:
-                    logging.error("Could not start job on worker '{}': {}".format(worker.worker_id, e))
+                    logger.error("Could not start job on worker '{}': {}".format(worker.worker_id, e))
                     if error_count:
                         error_count += 1
                         if error_count < self.max_job_errors:
@@ -611,7 +651,7 @@ class Controller(object):
                     kwargs = {'job_id': job_id, 'desired_months': desired_months, 'desks': desks}
                     worker.start_job(job_type='run-once', **kwargs)
             except Exception as e:
-                logging.error("Could not start job on worker '{}': {}".format(worker.worker_id, e))
+                logger.error("Could not start job on worker '{}': {}".format(worker.worker_id, e))
                 if error_count:
                     error_count += 1
                     if error_count < self.max_job_errors:

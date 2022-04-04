@@ -1,5 +1,6 @@
 #!/bin/bash
 cp Common.py ./Controller/Common.py
+cp Common.py ./Worker/Common.py
 cp Common.py ./APIServer/Common.py
 cp Common.py ./WebFrontend/Common.py
 
